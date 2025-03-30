@@ -5,7 +5,7 @@ Basic structure
 
 
 ### 2025/03/30 ver1 update
-Added sipe function to change the task data
+Added swipe function to change the data of tasks
 
 
 <https://youtube.com/shorts/H2AC0aRbJUI?feature=share>
