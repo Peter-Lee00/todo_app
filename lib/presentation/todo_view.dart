@@ -39,6 +39,10 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 200),
     );
+    // Load todos when the screen is initialized
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<TodoCubit>().loadTodos();
+    });
   }
 
   @override
@@ -153,8 +157,60 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
         final firstWeekday = firstDayOfMonth.weekday;
         final adjustedFirstWeekday = firstWeekday == 7 ? 0 : firstWeekday;
 
+        // Calculate date range limits (10 years from now)
+        final now = DateTime.now();
+        final minDate = DateTime(now.year, now.month, 1);
+        final maxDate = DateTime(now.year + 10, now.month, 1);
+
         return Column(
           children: [
+            // Month navigation
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left),
+                    onPressed:
+                        _selectedDate.isAfter(minDate)
+                            ? () {
+                              setState(() {
+                                _selectedDate = DateTime(
+                                  _selectedDate.year,
+                                  _selectedDate.month - 1,
+                                  1,
+                                );
+                              });
+                            }
+                            : null,
+                  ),
+                  Text(
+                    DateFormat('MMMM yyyy').format(_selectedDate),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed:
+                        _selectedDate.isBefore(maxDate)
+                            ? () {
+                              setState(() {
+                                _selectedDate = DateTime(
+                                  _selectedDate.year,
+                                  _selectedDate.month + 1,
+                                  1,
+                                );
+                              });
+                            }
+                            : null,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             // Weekday headers
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8.0),
@@ -214,7 +270,6 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
                   .fold(0, (max, count) => count > max ? count : max);
 
               // Calculate row height based on maximum tasks
-              // Base height for date header (20.0) + 3 tasks (3 * 24.0) + minimal padding (8.0)
               final baseHeight = 100.0; // Height to comfortably show 3 tasks
               final rowHeight =
                   maxTasksInWeek > 3
@@ -364,7 +419,28 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
     DateTime date,
     List<Todo> tasks,
   ) {
-    showModalBottomSheet(
+    String getFormattedDate(DateTime date) {
+      final now = DateTime.now();
+      final tomorrow = DateTime(now.year, now.month, now.day + 1);
+
+      if (date.year == now.year &&
+          date.month == now.month &&
+          date.day == now.day) {
+        return 'Today';
+      } else if (date.year == tomorrow.year &&
+          date.month == tomorrow.month &&
+          date.day == tomorrow.day) {
+        return 'Tomorrow';
+      } else {
+        final difference = date.difference(now).inDays;
+        if (difference > 0) {
+          return 'D-$difference';
+        }
+        return '${DateFormat('E').format(date)}, ${DateFormat('dd/MM').format(date)}';
+      }
+    }
+
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -387,7 +463,10 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
                                   todo.date.month == date.month &&
                                   todo.date.day == date.day,
                             )
-                            .toList();
+                            .toList()
+                          ..sort(
+                            (a, b) => a.orderIndex.compareTo(b.orderIndex),
+                          );
 
                     return Container(
                       decoration: const BoxDecoration(
@@ -415,9 +494,7 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
                                       ),
                                     ),
                                     Text(
-                                      date.isAtSameMomentAs(DateTime.now())
-                                          ? 'Today'
-                                          : '',
+                                      getFormattedDate(date),
                                       style: TextStyle(
                                         fontSize: 16,
                                         color: Colors.grey[600],
@@ -457,441 +534,38 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
                                         ],
                                       ),
                                     )
-                                    : ReorderableListView.builder(
-                                      onReorder: (oldIndex, newIndex) {
-                                        setState(() {
-                                          if (oldIndex < newIndex) {
-                                            newIndex -= 1;
-                                          }
-                                          final Todo item = dayTasks.removeAt(
-                                            oldIndex,
-                                          );
-                                          dayTasks.insert(newIndex, item);
-
-                                          // Update the order in the database
-                                          context
-                                              .read<TodoCubit>()
-                                              .reorderTodos(dayTasks);
-                                        });
-                                      },
-                                      proxyDecorator: (
-                                        child,
-                                        index,
-                                        animation,
-                                      ) {
-                                        return Material(
-                                          elevation: 4,
-                                          color: Colors.transparent,
-                                          borderRadius: BorderRadius.circular(
-                                            10,
-                                          ),
-                                          child: child,
-                                        );
-                                      },
-                                      physics:
-                                          const AlwaysScrollableScrollPhysics(),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 20,
-                                      ),
-                                      itemCount: dayTasks.length,
-                                      itemBuilder: (context, index) {
-                                        final todo = dayTasks[index];
-                                        return _buildTodoItem(
-                                          context,
-                                          todo.copyWith(order: index),
-                                          key: ValueKey(todo.id),
-                                        );
-                                      },
-                                    ),
+                                    : _buildTaskList(dayTasks),
                           ),
-                          Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: MouseRegion(
-                              onEnter: (_) => _addButtonController.forward(),
-                              onExit: (_) => _addButtonController.reverse(),
-                              child: AnimatedBuilder(
-                                animation: _addButtonController,
-                                builder:
-                                    (context, child) => InkWell(
-                                      onTap: () async {
-                                        final textController =
-                                            TextEditingController();
-                                        final result = await showModalBottomSheet<
-                                          bool
-                                        >(
-                                          context: context,
-                                          isScrollControlled: true,
-                                          shape: const RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.vertical(
-                                              top: Radius.circular(20),
-                                            ),
-                                          ),
-                                          builder:
-                                              (context) => StatefulBuilder(
-                                                builder:
-                                                    (
-                                                      context,
-                                                      setModalState,
-                                                    ) => Padding(
-                                                      padding: EdgeInsets.only(
-                                                        bottom:
-                                                            MediaQuery.of(
-                                                              context,
-                                                            ).viewInsets.bottom,
-                                                        top: 20,
-                                                        left: 20,
-                                                        right: 20,
-                                                      ),
-                                                      child: Column(
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        children: [
-                                                          // Category selector with manage button
-                                                          Row(
-                                                            children: [
-                                                              Expanded(
-                                                                child: BlocBuilder<
-                                                                  CategoryCubit,
-                                                                  List<
-                                                                    TodoCategory
-                                                                  >
-                                                                >(
-                                                                  builder: (
-                                                                    context,
-                                                                    categories,
-                                                                  ) {
-                                                                    return SingleChildScrollView(
-                                                                      scrollDirection:
-                                                                          Axis.horizontal,
-                                                                      child: Row(
-                                                                        children:
-                                                                            categories.map((
-                                                                              category,
-                                                                            ) {
-                                                                              final isSelected =
-                                                                                  category.name ==
-                                                                                  _selectedCategory;
-                                                                              return Padding(
-                                                                                padding: const EdgeInsets.only(
-                                                                                  right:
-                                                                                      8,
-                                                                                ),
-                                                                                child: GestureDetector(
-                                                                                  onTap:
-                                                                                      () => setModalState(
-                                                                                        () {
-                                                                                          _selectedCategory =
-                                                                                              category.name;
-                                                                                        },
-                                                                                      ),
-                                                                                  child: Container(
-                                                                                    padding: const EdgeInsets.symmetric(
-                                                                                      horizontal:
-                                                                                          12,
-                                                                                      vertical:
-                                                                                          6,
-                                                                                    ),
-                                                                                    decoration: BoxDecoration(
-                                                                                      color:
-                                                                                          isSelected
-                                                                                              ? category.color
-                                                                                              : category.color.withOpacity(
-                                                                                                0.1,
-                                                                                              ),
-                                                                                      borderRadius: BorderRadius.circular(
-                                                                                        20,
-                                                                                      ),
-                                                                                    ),
-                                                                                    child: Row(
-                                                                                      children: [
-                                                                                        Icon(
-                                                                                          category.icon,
-                                                                                          color:
-                                                                                              isSelected
-                                                                                                  ? Colors.white
-                                                                                                  : category.color,
-                                                                                          size:
-                                                                                              16,
-                                                                                        ),
-                                                                                        const SizedBox(
-                                                                                          width:
-                                                                                              4,
-                                                                                        ),
-                                                                                        Text(
-                                                                                          category.name,
-                                                                                          style: TextStyle(
-                                                                                            color:
-                                                                                                isSelected
-                                                                                                    ? Colors.white
-                                                                                                    : category.color,
-                                                                                            fontSize:
-                                                                                                12,
-                                                                                            fontWeight:
-                                                                                                isSelected
-                                                                                                    ? FontWeight.bold
-                                                                                                    : null,
-                                                                                          ),
-                                                                                        ),
-                                                                                      ],
-                                                                                    ),
-                                                                                  ),
-                                                                                ),
-                                                                              );
-                                                                            }).toList(),
-                                                                      ),
-                                                                    );
-                                                                  },
-                                                                ),
-                                                              ),
-                                                              Container(
-                                                                margin:
-                                                                    const EdgeInsets.only(
-                                                                      left: 8,
-                                                                    ),
-                                                                decoration: BoxDecoration(
-                                                                  color:
-                                                                      Colors
-                                                                          .grey[200],
-                                                                  borderRadius:
-                                                                      BorderRadius.circular(
-                                                                        20,
-                                                                      ),
-                                                                ),
-                                                                child: Material(
-                                                                  color:
-                                                                      Colors
-                                                                          .transparent,
-                                                                  child: InkWell(
-                                                                    borderRadius:
-                                                                        BorderRadius.circular(
-                                                                          20,
-                                                                        ),
-                                                                    onTap: () {
-                                                                      Navigator.push(
-                                                                        context,
-                                                                        MaterialPageRoute(
-                                                                          builder:
-                                                                              (
-                                                                                context,
-                                                                              ) =>
-                                                                                  const CategoryManagementScreen(),
-                                                                        ),
-                                                                      ).then((
-                                                                        _,
-                                                                      ) {
-                                                                        // Refresh categories when returning from management screen
-                                                                        if (context
-                                                                            .mounted) {
-                                                                          setModalState(
-                                                                            () {},
-                                                                          );
-                                                                        }
-                                                                      });
-                                                                    },
-                                                                    child: Padding(
-                                                                      padding: const EdgeInsets.symmetric(
-                                                                        horizontal:
-                                                                            12,
-                                                                        vertical:
-                                                                            6,
-                                                                      ),
-                                                                      child: Row(
-                                                                        mainAxisSize:
-                                                                            MainAxisSize.min,
-                                                                        children: [
-                                                                          Icon(
-                                                                            Icons.edit_outlined,
-                                                                            size:
-                                                                                16,
-                                                                            color:
-                                                                                Colors.grey[700],
-                                                                          ),
-                                                                          const SizedBox(
-                                                                            width:
-                                                                                4,
-                                                                          ),
-                                                                          Text(
-                                                                            'Edit',
-                                                                            style: TextStyle(
-                                                                              fontSize:
-                                                                                  12,
-                                                                              color:
-                                                                                  Colors.grey[700],
-                                                                              fontWeight:
-                                                                                  FontWeight.w500,
-                                                                            ),
-                                                                          ),
-                                                                        ],
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                          const SizedBox(
-                                                            height: 16,
-                                                          ),
-                                                          TextField(
-                                                            controller:
-                                                                textController,
-                                                            decoration:
-                                                                const InputDecoration(
-                                                                  hintText:
-                                                                      'Enter task name',
-                                                                  border:
-                                                                      InputBorder
-                                                                          .none,
-                                                                ),
-                                                            autofocus: true,
-                                                          ),
-                                                          const Divider(),
-                                                          Row(
-                                                            mainAxisAlignment:
-                                                                MainAxisAlignment
-                                                                    .spaceBetween,
-                                                            children: [
-                                                              TextButton.icon(
-                                                                onPressed:
-                                                                    () {},
-                                                                icon: const Icon(
-                                                                  Icons
-                                                                      .calendar_today,
-                                                                ),
-                                                                label:
-                                                                    const Text(
-                                                                      'Today',
-                                                                    ),
-                                                              ),
-                                                              TextButton.icon(
-                                                                onPressed:
-                                                                    () {},
-                                                                icon: const Icon(
-                                                                  Icons
-                                                                      .notifications_none,
-                                                                ),
-                                                                label:
-                                                                    const Text(
-                                                                      'Daily',
-                                                                    ),
-                                                              ),
-                                                              IconButton(
-                                                                onPressed: () async {
-                                                                  if (textController
-                                                                      .text
-                                                                      .isNotEmpty) {
-                                                                    await context
-                                                                        .read<
-                                                                          TodoCubit
-                                                                        >()
-                                                                        .addTodo(
-                                                                          textController
-                                                                              .text,
-                                                                          _selectedCategory,
-                                                                        );
-                                                                    if (context
-                                                                        .mounted) {
-                                                                      Navigator.pop(
-                                                                        context,
-                                                                        true,
-                                                                      );
-                                                                    }
-                                                                  }
-                                                                },
-                                                                icon: const Icon(
-                                                                  Icons.send,
-                                                                  color:
-                                                                      Colors
-                                                                          .blue,
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                              ),
-                                        );
-
-                                        if (result == true && context.mounted) {
-                                          context
-                                              .read<TodoCubit>()
-                                              .loadTodosForDate(date);
-                                        }
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 15,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            colors: [
-                                              Colors.blue.withOpacity(
-                                                0.8 +
-                                                    _addButtonController.value *
-                                                        0.2,
-                                              ),
-                                              Colors.blue.shade400.withOpacity(
-                                                0.8 +
-                                                    _addButtonController.value *
-                                                        0.2,
-                                              ),
-                                            ],
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            15,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.blue.withOpacity(
-                                                0.3,
-                                              ),
-                                              blurRadius:
-                                                  8 +
-                                                  (_addButtonController.value *
-                                                      4),
-                                              offset: Offset(
-                                                0,
-                                                4 -
-                                                    (_addButtonController
-                                                            .value *
-                                                        2),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.add_circle_outline,
-                                              color: Colors.white,
-                                              size:
-                                                  24 +
-                                                  (_addButtonController.value *
-                                                      2),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              'Add a Task',
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize:
-                                                    16 +
-                                                    (_addButtonController
-                                                            .value *
-                                                        1),
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ],
+                          Container(
+                            margin: const EdgeInsets.all(16),
+                            child: Material(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => _showAddTodoDialog(context, date),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.add_circle_outline,
+                                        color: Colors.grey[600],
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        'Add a Task',
+                                        style: TextStyle(
+                                          color: Colors.grey[600],
+                                          fontSize: 16,
                                         ),
                                       ),
-                                    ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -904,137 +578,589 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildTodoItem(BuildContext context, Todo todo, {Key? key}) {
-    return Dismissible(
-      key: key ?? Key(todo.id.toString()),
-      background: Container(
-        color: Colors.green.withOpacity(0.7),
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(left: 20),
-        child: Row(
-          children: [
-            const Icon(Icons.check, color: Colors.white),
-            const SizedBox(width: 8),
-            Text(
-              'Complete',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-      secondaryBackground: Container(
-        color: Colors.red.withOpacity(0.7),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Text(
-              'Delete',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Icon(Icons.delete, color: Colors.white),
-          ],
-        ),
-      ),
-      confirmDismiss: (direction) async {
-        if (direction == DismissDirection.startToEnd) {
-          // Mark as completed
-          await context.read<TodoCubit>().toggleTodo(todo.id);
-          return false;
-        } else {
-          // Show delete confirmation
-          final bool? delete = await showDialog<bool>(
-            context: context,
+  Widget _buildTaskList(List<Todo> todos) {
+    return ReorderableListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: todos.length,
+      onReorder: (oldIndex, newIndex) {
+        if (oldIndex < newIndex) {
+          newIndex -= 1;
+        }
+        final item = todos.removeAt(oldIndex);
+        todos.insert(newIndex, item);
+        // Update order indices
+        for (var i = 0; i < todos.length; i++) {
+          todos[i] = todos[i].copyWith(orderIndex: i);
+        }
+        context.read<TodoCubit>().reorderTodos(todos);
+      },
+      itemBuilder: (context, index) {
+        final todo = todos[index];
+        return _buildTodoItem(context, todo, key: ValueKey(todo.id));
+      },
+    );
+  }
+
+  void _showAddTodoDialog(BuildContext context, DateTime date) {
+    final textController = TextEditingController();
+    bool hasNotification = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder:
+          (context) => StatefulBuilder(
             builder:
-                (context) => AlertDialog(
-                  title: const Text('Delete Task'),
-                  content: const Text(
-                    'Are you sure you want to delete this task?',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel'),
+                (context, setState) => Container(
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(20),
                     ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text(
-                        'Delete',
-                        style: TextStyle(color: Colors.red),
+                  ),
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom,
+                    top: 20,
+                    left: 20,
+                    right: 20,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Task input field
+                      TextField(
+                        controller: textController,
+                        decoration: const InputDecoration(
+                          hintText: 'Enter task details...',
+                          border: OutlineInputBorder(),
+                        ),
+                        maxLines: 1,
+                        autofocus: true,
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Category header with management button
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Category',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder:
+                                      (context) =>
+                                          const CategoryManagementScreen(),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.edit, size: 18),
+                            label: const Text('Add / Edit'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Category selection
+                      BlocBuilder<CategoryCubit, List<TodoCategory>>(
+                        builder: (context, categories) {
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children:
+                                  categories.map((category) {
+                                    final isSelected =
+                                        category.name == _selectedCategory;
+                                    return Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                          onTap:
+                                              () => setState(
+                                                () =>
+                                                    _selectedCategory =
+                                                        category.name,
+                                              ),
+                                          child: AnimatedContainer(
+                                            duration: const Duration(
+                                              milliseconds: 200,
+                                            ),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  isSelected
+                                                      ? category.color
+                                                      : category.color
+                                                          .withOpacity(0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                              border: Border.all(
+                                                color:
+                                                    isSelected
+                                                        ? category.color
+                                                        : Colors.transparent,
+                                                width: 2,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  category.icon,
+                                                  color:
+                                                      isSelected
+                                                          ? Colors.white
+                                                          : category.color,
+                                                  size: 16,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  category.name,
+                                                  style: TextStyle(
+                                                    color:
+                                                        isSelected
+                                                            ? Colors.white
+                                                            : category.color,
+                                                    fontSize: 14,
+                                                    fontWeight:
+                                                        isSelected
+                                                            ? FontWeight.bold
+                                                            : null,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Date and notification selection
+                      Row(
+                        children: [
+                          // Date selection
+                          Expanded(
+                            child: Material(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () {
+                                  _showDatePicker(
+                                    context,
+                                    date,
+                                    (newDate) => setState(() => date = newDate),
+                                  );
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.calendar_today,
+                                        color: Colors.grey[600],
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        DateFormat('E, MMM d').format(date),
+                                        style: TextStyle(
+                                          color: Colors.grey[800],
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      Icon(
+                                        Icons.arrow_forward_ios,
+                                        color: Colors.grey[400],
+                                        size: 16,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Notification toggle
+                          Material(
+                            color:
+                                hasNotification
+                                    ? Colors.blue[100]
+                                    : Colors.grey[100],
+                            borderRadius: BorderRadius.circular(12),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap:
+                                  () => setState(
+                                    () => hasNotification = !hasNotification,
+                                  ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Icon(
+                                  hasNotification
+                                      ? Icons.notifications_active
+                                      : Icons.notifications_none,
+                                  color:
+                                      hasNotification
+                                          ? Colors.blue
+                                          : Colors.grey[600],
+                                  size: 24,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Action buttons
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Cancel'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () {
+                              if (textController.text.isNotEmpty) {
+                                _createTask(textController.text, date);
+                                Navigator.pop(context);
+                              }
+                            },
+                            child: const Text('Add Task'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+          ),
+    );
+  }
+
+  Future<void> _createTask(String text, DateTime date) async {
+    if (text.isNotEmpty) {
+      await context.read<TodoCubit>().addTodo(text, _selectedCategory, date);
+      // Refresh the todos
+      context.read<TodoCubit>().loadTodos();
+    }
+  }
+
+  Widget _buildOptionChip(
+    BuildContext context, {
+    IconData? icon,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue : Colors.grey[200],
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child:
+            icon != null
+                ? Icon(
+                  icon,
+                  color: isSelected ? Colors.white : Colors.grey[600],
+                  size: 20,
+                )
+                : Text(
+                  label,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.grey[600],
+                    fontWeight: isSelected ? FontWeight.w500 : null,
+                  ),
+                ),
+      ),
+    );
+  }
+
+  void _showDatePicker(
+    BuildContext context,
+    DateTime initialDate,
+    Function(DateTime) onDateSelected,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder:
+          (context) => StatefulBuilder(
+            builder: (context, setState) {
+              DateTime selectedDate = initialDate;
+              String selectedOption = 'normal';
+
+              return Container(
+                height: MediaQuery.of(context).size.height * 0.7,
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Select Date',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildOptionChip(
+                          context,
+                          label: 'Today',
+                          isSelected: selectedOption == 'today',
+                          onTap: () {
+                            setState(() {
+                              selectedOption = 'today';
+                              selectedDate = DateTime.now();
+                            });
+                          },
+                        ),
+                        _buildOptionChip(
+                          context,
+                          label: 'Tomorrow',
+                          isSelected: selectedOption == 'tomorrow',
+                          onTap: () {
+                            setState(() {
+                              selectedOption = 'tomorrow';
+                              selectedDate = DateTime.now().add(
+                                const Duration(days: 1),
+                              );
+                            });
+                          },
+                        ),
+                        _buildOptionChip(
+                          context,
+                          label: 'Next Week',
+                          isSelected: selectedOption == 'nextWeek',
+                          onTap: () {
+                            setState(() {
+                              selectedOption = 'nextWeek';
+                              selectedDate = DateTime.now().add(
+                                const Duration(days: 7),
+                              );
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      DateFormat('MMMM yyyy').format(selectedDate),
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children:
+                          ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+                              .map(
+                                (day) => Text(
+                                  day,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: GridView.builder(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 7,
+                              childAspectRatio: 1,
+                            ),
+                        itemCount:
+                            DateTime(
+                              selectedDate.year,
+                              selectedDate.month + 1,
+                              0,
+                            ).day,
+                        itemBuilder: (context, index) {
+                          final day = index + 1;
+                          final date = DateTime(
+                            selectedDate.year,
+                            selectedDate.month,
+                            day,
+                          );
+                          final isSelected = day == selectedDate.day;
+                          final isToday =
+                              DateTime.now().day == day &&
+                              DateTime.now().month == selectedDate.month &&
+                              DateTime.now().year == selectedDate.year;
+
+                          return GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                selectedDate = date;
+                                selectedOption = 'normal';
+                              });
+                              onDateSelected(date);
+                              Navigator.pop(context);
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: isSelected ? Colors.blue : null,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  day.toString(),
+                                  style: TextStyle(
+                                    color:
+                                        isSelected
+                                            ? Colors.white
+                                            : Colors.black,
+                                    fontWeight:
+                                        isSelected ? FontWeight.bold : null,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
                 ),
-          );
-          if (delete == true) {
-            await context.read<TodoCubit>().deleteTodo(todo);
-            return true;
-          }
+              );
+            },
+          ),
+    );
+  }
+
+  Widget _buildTodoItem(BuildContext context, Todo todo, {Key? key}) {
+    return Dismissible(
+      key: key ?? ValueKey(todo.id),
+      background: Container(
+        color: Colors.red,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      secondaryBackground: Container(
+        color: Colors.green,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: const Icon(Icons.check, color: Colors.white),
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          _showDeleteConfirmation(context, todo);
+          return false;
+        } else if (direction == DismissDirection.endToStart) {
+          context.read<TodoCubit>().toggleTodo(todo.id);
           return false;
         }
+        return false;
       },
       child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        child: Container(
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            color: _getCategoryColor(todo.category).withOpacity(0.1),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: _getCategoryColor(todo.category).withOpacity(0.2),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        decoration: BoxDecoration(
+          color: _getCategoryColor(todo.category).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 8,
+          ),
+          title: Text(
+            todo.text,
+            style: TextStyle(
+              decoration: todo.isCompleted ? TextDecoration.lineThrough : null,
+              color: todo.isCompleted ? Colors.grey : Colors.black,
             ),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  todo.text,
-                  style: TextStyle(
-                    decoration:
-                        todo.isCompleted ? TextDecoration.lineThrough : null,
-                    color: todo.isCompleted ? Colors.grey : Colors.black87,
-                  ),
-                ),
-              ),
-              if (!todo.isCompleted) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _getCategoryColor(todo.category).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    todo.category,
-                    style: TextStyle(
-                      color: _getCategoryColor(todo.category),
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: const Icon(Icons.more_vert, size: 20),
-                  onPressed: () => _showEditTodoDialog(context, todo),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 24,
-                ),
-              ],
-            ],
+          subtitle: Text(
+            todo.category,
+            style: TextStyle(
+              color: _getCategoryColor(todo.category),
+              fontSize: 12,
+            ),
+          ),
+          trailing: IconButton(
+            icon: const Icon(Icons.more_vert),
+            onPressed: () => _showEditOptions(context, todo),
           ),
         ),
       ),
+    );
+  }
+
+  void _showEditOptions(BuildContext context, Todo todo) {
+    showModalBottomSheet(
+      context: context,
+      builder:
+          (context) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.edit),
+                  title: const Text('Edit Task'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showEditTodoDialog(context, todo);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.delete),
+                  title: const Text('Delete Task'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showDeleteConfirmation(context, todo);
+                  },
+                ),
+              ],
+            ),
+          ),
     );
   }
 
@@ -1079,494 +1205,11 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
     );
   }
 
-  void _showAddTodoDialog(BuildContext context) {
-    final textController = TextEditingController();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder:
-          (context) => StatefulBuilder(
-            builder:
-                (context, setModalState) => Padding(
-                  padding: EdgeInsets.only(
-                    bottom: MediaQuery.of(context).viewInsets.bottom,
-                    top: 20,
-                    left: 20,
-                    right: 20,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      TextField(
-                        controller: textController,
-                        decoration: const InputDecoration(
-                          hintText: 'Enter task name',
-                          border: InputBorder.none,
-                        ),
-                        autofocus: true,
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Select Category',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder:
-                                      (context) =>
-                                          const CategoryManagementScreen(),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.edit),
-                            label: const Text('Manage'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      BlocBuilder<CategoryCubit, List<TodoCategory>>(
-                        builder: (context, categories) {
-                          return SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children:
-                                  categories.map((category) {
-                                    final isSelected =
-                                        category.name == _selectedCategory;
-                                    return Padding(
-                                      padding: const EdgeInsets.only(right: 10),
-                                      child: GestureDetector(
-                                        onTap:
-                                            () => setModalState(() {
-                                              _selectedCategory = category.name;
-                                            }),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 16,
-                                            vertical: 8,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                isSelected
-                                                    ? category.color
-                                                    : category.color
-                                                        .withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(
-                                              20,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                category.icon,
-                                                color:
-                                                    isSelected
-                                                        ? Colors.white
-                                                        : category.color,
-                                                size: 20,
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                category.name,
-                                                style: TextStyle(
-                                                  color:
-                                                      isSelected
-                                                          ? Colors.white
-                                                          : category.color,
-                                                  fontWeight:
-                                                      isSelected
-                                                          ? FontWeight.bold
-                                                          : null,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  }).toList(),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton.icon(
-                            onPressed: () {},
-                            icon: const Icon(Icons.calendar_today),
-                            label: const Text('Today'),
-                          ),
-                          TextButton.icon(
-                            onPressed: () {},
-                            icon: const Icon(Icons.notifications_none),
-                            label: const Text('Daily'),
-                          ),
-                          IconButton(
-                            onPressed: () {
-                              if (textController.text.isNotEmpty) {
-                                context.read<TodoCubit>().addTodo(
-                                  textController.text,
-                                  _selectedCategory,
-                                );
-                                Navigator.pop(context);
-                              }
-                            },
-                            icon: const Icon(Icons.send, color: Colors.blue),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                    ],
-                  ),
-                ),
-          ),
-    );
-  }
-
-  void _showCategoryDialog(BuildContext context, [TodoCategory? category]) {
-    final nameController = TextEditingController(text: category?.name);
-    Color selectedColor = category?.color ?? Colors.blue;
-    IconData selectedIcon = category?.icon ?? Icons.label;
-
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Text(category == null ? 'Add Category' : 'Edit Category'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Category Name',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  StatefulBuilder(
-                    builder:
-                        (context, setState) => Column(
-                          children: [
-                            const Text('Select Color'),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children:
-                                  [
-                                        Colors.blue,
-                                        Colors.red,
-                                        Colors.green,
-                                        Colors.orange,
-                                        Colors.purple,
-                                        Colors.teal,
-                                        Colors.pink,
-                                        Colors.indigo,
-                                        Colors.amber,
-                                        Colors.cyan,
-                                        Colors.deepOrange,
-                                        Colors.lightBlue,
-                                      ]
-                                      .map(
-                                        (color) => GestureDetector(
-                                          onTap:
-                                              () => setState(
-                                                () => selectedColor = color,
-                                              ),
-                                          child: Container(
-                                            width: 40,
-                                            height: 40,
-                                            decoration: BoxDecoration(
-                                              color: color,
-                                              shape: BoxShape.circle,
-                                              border:
-                                                  color == selectedColor
-                                                      ? Border.all(
-                                                        color: Colors.black,
-                                                        width: 2,
-                                                      )
-                                                      : null,
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                      .toList(),
-                            ),
-                            const SizedBox(height: 20),
-                            const Text('Select Icon'),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children:
-                                  [
-                                        Icons.label,
-                                        Icons.work,
-                                        Icons.shopping_bag,
-                                        Icons.favorite,
-                                        Icons.school,
-                                        Icons.sports,
-                                        Icons.movie,
-                                        Icons.book,
-                                        Icons.home,
-                                        Icons.fitness_center,
-                                        Icons.music_note,
-                                        Icons.brush,
-                                      ]
-                                      .map(
-                                        (icon) => GestureDetector(
-                                          onTap:
-                                              () => setState(
-                                                () => selectedIcon = icon,
-                                              ),
-                                          child: Container(
-                                            width: 40,
-                                            height: 40,
-                                            decoration: BoxDecoration(
-                                              color:
-                                                  icon == selectedIcon
-                                                      ? selectedColor
-                                                          .withOpacity(0.2)
-                                                      : null,
-                                              shape: BoxShape.circle,
-                                            ),
-                                            child: Icon(
-                                              icon,
-                                              color:
-                                                  icon == selectedIcon
-                                                      ? selectedColor
-                                                      : Colors.grey,
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                      .toList(),
-                            ),
-                          ],
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () {
-                  if (nameController.text.isNotEmpty) {
-                    if (category == null) {
-                      context.read<CategoryCubit>().addCategory(
-                        nameController.text,
-                        selectedColor,
-                        selectedIcon,
-                      );
-                    } else {
-                      context.read<CategoryCubit>().updateCategory(
-                        category.id,
-                        nameController.text,
-                        selectedColor,
-                        selectedIcon,
-                      );
-                    }
-                    Navigator.pop(context);
-                  }
-                },
-                child: Text(category == null ? 'Add' : 'Save'),
-              ),
-            ],
-          ),
-    );
-  }
-
-  Future<void> _animateAndShowDialog(BuildContext context) async {
-    final textController = TextEditingController();
-    final result = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder:
-          (context) => StatefulBuilder(
-            builder:
-                (context, setModalState) => Padding(
-                  padding: EdgeInsets.only(
-                    bottom: MediaQuery.of(context).viewInsets.bottom,
-                    top: 20,
-                    left: 20,
-                    right: 20,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      TextField(
-                        controller: textController,
-                        decoration: const InputDecoration(
-                          hintText: 'Enter task name',
-                          border: InputBorder.none,
-                        ),
-                        autofocus: true,
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Select Category',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder:
-                                      (context) =>
-                                          const CategoryManagementScreen(),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.edit),
-                            label: const Text('Manage'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      BlocBuilder<CategoryCubit, List<TodoCategory>>(
-                        builder: (context, categories) {
-                          return SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children:
-                                  categories.map((category) {
-                                    final isSelected =
-                                        category.name == _selectedCategory;
-                                    return Padding(
-                                      padding: const EdgeInsets.only(right: 10),
-                                      child: GestureDetector(
-                                        onTap:
-                                            () => setModalState(() {
-                                              _selectedCategory = category.name;
-                                            }),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 16,
-                                            vertical: 8,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                isSelected
-                                                    ? category.color
-                                                    : category.color
-                                                        .withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(
-                                              20,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                category.icon,
-                                                color:
-                                                    isSelected
-                                                        ? Colors.white
-                                                        : category.color,
-                                                size: 20,
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                category.name,
-                                                style: TextStyle(
-                                                  color:
-                                                      isSelected
-                                                          ? Colors.white
-                                                          : category.color,
-                                                  fontWeight:
-                                                      isSelected
-                                                          ? FontWeight.bold
-                                                          : null,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  }).toList(),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton.icon(
-                            onPressed: () {},
-                            icon: const Icon(Icons.calendar_today),
-                            label: const Text('Today'),
-                          ),
-                          TextButton.icon(
-                            onPressed: () {},
-                            icon: const Icon(Icons.notifications_none),
-                            label: const Text('Daily'),
-                          ),
-                          IconButton(
-                            onPressed: () async {
-                              if (textController.text.isNotEmpty) {
-                                await context.read<TodoCubit>().addTodo(
-                                  textController.text,
-                                  _selectedCategory,
-                                );
-                                if (context.mounted) {
-                                  Navigator.pop(context, true);
-                                }
-                              }
-                            },
-                            icon: const Icon(Icons.send, color: Colors.blue),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-          ),
-    );
-
-    // If task was added successfully, refresh the list
-    if (result == true && context.mounted) {
-      context.read<TodoCubit>().loadTodosForDate(_selectedDate);
-    }
-  }
-
   void _showEditTodoDialog(BuildContext context, Todo todo) {
     final textController = TextEditingController(text: todo.text);
-    // Initialize with the todo's current category
+    // Initialize with the todo's current category and date
     String selectedCategory = todo.category;
+    DateTime selectedDate = todo.date;
 
     showModalBottomSheet(
       context: context,
@@ -1695,6 +1338,52 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
                         },
                       ),
                       const SizedBox(height: 20),
+                      // Date selection
+                      Material(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(12),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () {
+                            _showDatePicker(
+                              context,
+                              selectedDate,
+                              (newDate) =>
+                                  setModalState(() => selectedDate = newDate),
+                            );
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.calendar_today,
+                                  color: Colors.grey[600],
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  DateFormat('E, MMM d').format(selectedDate),
+                                  style: TextStyle(
+                                    color: Colors.grey[800],
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Icon(
+                                  Icons.arrow_forward_ios,
+                                  color: Colors.grey[400],
+                                  size: 16,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -1709,6 +1398,7 @@ class _TodoViewState extends State<TodoView> with TickerProviderStateMixin {
                                   todo.copyWith(
                                     text: textController.text,
                                     category: selectedCategory,
+                                    date: selectedDate,
                                   ),
                                 );
                                 Navigator.pop(context);
